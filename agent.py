@@ -33,15 +33,31 @@ def get_db():
         from google.cloud import firestore
         from google.oauth2 import service_account
 
-        creds_dict = dict(st.secrets["gcp_service_account"])
-        if "private_key" in creds_dict:
-            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+        # Build a clean dict with only the fields service_account needs
+        raw = st.secrets["gcp_service_account"]
+        creds_dict = {
+            "type": raw["type"],
+            "project_id": raw["project_id"],
+            "private_key_id": raw["private_key_id"],
+            "private_key": raw["private_key"].replace("\\n", "\n"),
+            "client_email": raw["client_email"],
+            "client_id": raw["client_id"],
+            "auth_uri": raw["auth_uri"],
+            "token_uri": raw["token_uri"],
+            "auth_provider_x509_cert_url": raw["auth_provider_x509_cert_url"],
+            "client_x509_cert_url": raw["client_x509_cert_url"],
+        }
 
         credentials = service_account.Credentials.from_service_account_info(creds_dict)
-        _db = firestore.Client(credentials=credentials, project=creds_dict["project_id"], database="uplan-memory")
+        _db = firestore.Client(
+            credentials=credentials,
+            project=creds_dict["project_id"],
+            database="uplan-memory"
+        )
         return _db
     except Exception as e:
         print(f"Firestore init failed: {e}")
+        raise  # Re-raise so Streamlit shows the actual error
         return None
 
 
