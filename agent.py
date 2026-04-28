@@ -183,7 +183,7 @@ def vet_recommendations(events_text: str, user_facts_json: str) -> str:
     Returns a curated, preference-aligned shortlist with reasoning.
     """
     llm = ChatOpenAI(
-        model="mistralai/mistral-small-3.1-24b-instruct:free",
+        model="openai/gpt-4o-mini",
         base_url="https://openrouter.ai/api/v1",
         api_key=os.getenv("OPENROUTER_API_KEY", ""),
         temperature=0.3,
@@ -224,7 +224,7 @@ def build_agent():
     tools = [remember_user_facts, get_user_facts, search_events, vet_recommendations]
 
     llm = ChatOpenAI(
-        model="mistralai/mistral-small-3.1-24b-instruct:free",
+        model="openai/gpt-4o-mini",
         base_url="https://openrouter.ai/api/v1",
         api_key=os.getenv("OPENROUTER_API_KEY", ""),
         temperature=0.7,
