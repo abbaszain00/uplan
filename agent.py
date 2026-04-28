@@ -367,7 +367,7 @@ Return ONLY the JSON object, no other text."""
         if facts:
             save_memory(facts)
     except Exception as e:
-        pass    print(f"[DEBUG] Fact extraction failed: {e}")
+        pass    
 
 
 def chat(message: str, history: list) -> str:

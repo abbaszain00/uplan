@@ -4,3 +4,4 @@ event_cache.json
 __pycache__/
 *.pyc
 .env
+service_account.json
