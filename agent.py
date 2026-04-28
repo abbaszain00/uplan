@@ -1,7 +1,6 @@
 import json
 import os
 import requests
-import secrets_loader  # noqa: F401 — loads API keys into env
 from datetime import datetime, timedelta
 from typing import Annotated, TypedDict
 
@@ -12,51 +11,84 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 
-# ── Memory file ──────────────────────────────────────────────────────────────
-MEMORY_FILE = "user_memory.json"
+# ── Secrets ───────────────────────────────────────────────────────────────────
+try:
+    import streamlit as st
+    if "OPENROUTER_API_KEY" in st.secrets:
+        os.environ["OPENROUTER_API_KEY"] = st.secrets["OPENROUTER_API_KEY"]
+    if "TICKETMASTER_API_KEY" in st.secrets:
+        os.environ["TICKETMASTER_API_KEY"] = st.secrets["TICKETMASTER_API_KEY"]
+except Exception:
+    pass
+
+# ── Firestore ─────────────────────────────────────────────────────────────────
+_db = None
+
+def get_db():
+    global _db
+    if _db is not None:
+        return _db
+    try:
+        import streamlit as st
+        from google.cloud import firestore
+        from google.oauth2 import service_account
+
+        creds_dict = dict(st.secrets["gcp_service_account"])
+        if "private_key" in creds_dict:
+            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+
+        credentials = service_account.Credentials.from_service_account_info(creds_dict)
+        _db = firestore.Client(credentials=credentials, project=creds_dict["project_id"])
+        return _db
+    except Exception as e:
+        print(f"Firestore init failed: {e}")
+        return None
+
+
+USER_DOC = "default_user"
 
 
 def load_memory() -> dict:
-    if os.path.exists(MEMORY_FILE):
-        with open(MEMORY_FILE, "r") as f:
-            return json.load(f)
-    return {}
+    try:
+        db = get_db()
+        if db is None:
+            return {}
+        doc = db.collection("uplan_memory").document(USER_DOC).get()
+        if doc.exists:
+            return doc.to_dict()
+        return {}
+    except Exception as e:
+        print(f"load_memory error: {e}")
+        return {}
 
 
 def save_memory(data: dict):
-    existing = load_memory()
-    existing.update(data)
-    with open(MEMORY_FILE, "w") as f:
-        json.dump(existing, f, indent=2)
+    try:
+        db = get_db()
+        if db is None:
+            return
+        ref = db.collection("uplan_memory").document(USER_DOC)
+        ref.set(data, merge=True)
+    except Exception as e:
+        print(f"save_memory error: {e}")
 
 
-# ── Event cache ───────────────────────────────────────────────────────────────
-EVENT_CACHE_FILE = "event_cache.json"
-
-
-def load_event_cache() -> dict:
-    if os.path.exists(EVENT_CACHE_FILE):
-        with open(EVENT_CACHE_FILE, "r") as f:
-            return json.load(f)
-    return {}
-
-
-def save_event_cache(key: str, data: list):
-    cache = load_event_cache()
-    cache[key] = {"timestamp": datetime.now().isoformat(), "events": data}
-    with open(EVENT_CACHE_FILE, "w") as f:
-        json.dump(cache, f, indent=2)
+# ── Event cache (in-memory per session) ───────────────────────────────────────
+_event_cache: dict = {}
 
 
 def get_cached_events(key: str, max_age_minutes: int = 30) -> list | None:
-    cache = load_event_cache()
-    if key not in cache:
+    if key not in _event_cache:
         return None
-    entry = cache[key]
+    entry = _event_cache[key]
     cached_at = datetime.fromisoformat(entry["timestamp"])
     if datetime.now() - cached_at < timedelta(minutes=max_age_minutes):
         return entry["events"]
     return None
+
+
+def save_event_cache(key: str, data: list):
+    _event_cache[key] = {"timestamp": datetime.now().isoformat(), "events": data}
 
 
 # ── Tools ─────────────────────────────────────────────────────────────────────
@@ -64,10 +96,10 @@ def get_cached_events(key: str, max_age_minutes: int = 30) -> list | None:
 @tool
 def remember_user_facts(facts: dict) -> str:
     """
-    Store important long-term facts about the user.
+    Store important long-term facts about the user persistently.
     Pass a dict of key-value pairs, e.g.:
     {"budget": "zero/free only", "location": "London", "interests": ["music", "sport"]}
-    Keys can be anything meaningful: budget, location, interests, availability, preferences, etc.
+    Call this whenever the user shares something important about themselves.
     """
     save_memory(facts)
     return f"Got it — I've remembered: {json.dumps(facts, indent=2)}"
@@ -77,11 +109,11 @@ def remember_user_facts(facts: dict) -> str:
 def get_user_facts() -> str:
     """
     Retrieve all stored long-term facts about the user.
-    Call this at the start of a new session or when you need to recall what you know about the user.
+    ALWAYS call this at the very start of every new session.
     """
     memory = load_memory()
     if not memory:
-        return "No user facts stored yet."
+        return "No user facts stored yet — this appears to be a new user."
     return json.dumps(memory, indent=2)
 
 
@@ -100,7 +132,6 @@ def search_events(location: str, keyword: str = "", start_date: str = "", end_da
     if not api_key:
         return "Ticketmaster API key not configured."
 
-    # Default dates
     if not start_date:
         start_date = datetime.now().strftime("%Y-%m-%dT00:00:00Z")
     else:
@@ -218,7 +249,7 @@ class State(TypedDict):
     messages: Annotated[list, add_messages]
 
 
-# ── LLM + tools ───────────────────────────────────────────────────────────────
+# ── Agent ─────────────────────────────────────────────────────────────────────
 
 def build_agent():
     tools = [remember_user_facts, get_user_facts, search_events, vet_recommendations]
@@ -237,21 +268,21 @@ def build_agent():
 Your personality: friendly, encouraging, curious about the user, never overwhelming.
 
 Your capabilities:
-1. REMEMBER users long-term — at the START of every conversation, call get_user_facts to recall what you know.
+1. REMEMBER users long-term — at the START of every conversation, ALWAYS call get_user_facts first before responding.
 2. LEARN from users — when they share preferences (budget, location, interests, availability), call remember_user_facts immediately.
 3. FIND events — when a user wants event suggestions, call search_events with appropriate parameters.
-4. VET recommendations — after fetching events, ALWAYS call vet_recommendations passing the events and user facts before presenting results to the user. Never show raw unvetted results.
-5. UPDATE memory — if the user changes their mind (e.g. switches from music to sport), update memory accordingly.
+4. VET recommendations — after fetching events, ALWAYS call vet_recommendations passing the events and user facts before presenting results. Never show raw unvetted results.
+5. UPDATE memory — if the user changes their mind (e.g. switches from music to sport), update memory with the new preference.
 
 Conversation flow:
-- First message of a session: greet warmly + silently call get_user_facts to check if you know them.
-- If you know them: reference what you remember naturally ("Welcome back! Still keen on keeping things budget-friendly?")
+- First message of ANY session: silently call get_user_facts FIRST, then greet.
+- If you know them: reference what you remember naturally e.g. "Welcome back! I remember you're keen on keeping things budget-friendly — still the case?"
 - If new user: introduce yourself briefly and ask what they're interested in.
-- Ask for missing info naturally (location, budget, dates) — don't bombard with all questions at once.
-- When showing events: present the VETTED shortlist, not the raw API dump.
+- Ask for missing info naturally (location, budget, dates) — one question at a time.
+- When showing events: present the VETTED shortlist only, not the raw API dump.
 - Keep responses concise and conversational. Use emojis sparingly but warmly.
 
-Budget awareness: If a user mentions tight budget or free-only, this is a top priority filter. Never recommend paid events without flagging the cost clearly.
+Budget awareness: If a user mentions tight/zero budget, this is top priority. Never recommend paid events without flagging the cost clearly.
 
 Today's date: """ + datetime.now().strftime("%A, %d %B %Y")
 
