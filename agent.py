@@ -38,7 +38,7 @@ def get_db():
             creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
 
         credentials = service_account.Credentials.from_service_account_info(creds_dict)
-        _db = firestore.Client(credentials=credentials, project=creds_dict["project_id"])
+        _db = firestore.Client(credentials=credentials, project=creds_dict["project_id"], database="uplan-memory")
         return _db
     except Exception as e:
         print(f"Firestore init failed: {e}")
