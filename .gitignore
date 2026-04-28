@@ -1,0 +1,6 @@
+.streamlit/secrets.toml
+user_memory.json
+event_cache.json
+__pycache__/
+*.pyc
+.env
