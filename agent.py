@@ -117,9 +117,7 @@ def remember_user_facts(facts: dict) -> str:
     {"budget": "zero/free only", "location": "London", "interests": ["music", "sport"]}
     Call this whenever the user shares something important about themselves.
     """
-    print(f"[DEBUG] remember_user_facts called with: {facts}")
     save_memory(facts)
-    print(f"[DEBUG] save_memory completed")
     return f"Got it — I've remembered: {json.dumps(facts, indent=2)}"
 
 
@@ -367,11 +365,9 @@ Return ONLY the JSON object, no other text."""
         text = response.content.strip().strip("```json").strip("```").strip()
         facts = json.loads(text)
         if facts:
-            
             save_memory(facts)
-            
     except Exception as e:
-        
+        pass    print(f"[DEBUG] Fact extraction failed: {e}")
 
 
 def chat(message: str, history: list) -> str:
