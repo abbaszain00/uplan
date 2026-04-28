@@ -117,7 +117,9 @@ def remember_user_facts(facts: dict) -> str:
     {"budget": "zero/free only", "location": "London", "interests": ["music", "sport"]}
     Call this whenever the user shares something important about themselves.
     """
+    print(f"[DEBUG] remember_user_facts called with: {facts}")
     save_memory(facts)
+    print(f"[DEBUG] save_memory completed")
     return f"Got it — I've remembered: {json.dumps(facts, indent=2)}"
 
 
@@ -283,22 +285,30 @@ def build_agent():
 
 Your personality: friendly, encouraging, curious about the user, never overwhelming.
 
-Your capabilities:
-1. REMEMBER users long-term — at the START of every conversation, ALWAYS call get_user_facts first before responding.
-2. LEARN from users — when they share preferences (budget, location, interests, availability), call remember_user_facts immediately.
-3. FIND events — when a user wants event suggestions, call search_events with appropriate parameters.
-4. VET recommendations — after fetching events, ALWAYS call vet_recommendations passing the events and user facts before presenting results. Never show raw unvetted results.
-5. UPDATE memory — if the user changes their mind (e.g. switches from music to sport), update memory with the new preference.
+STRICT TOOL RULES — you must follow these exactly:
 
-Conversation flow:
-- First message of ANY session: silently call get_user_facts FIRST, then greet.
-- If you know them: reference what you remember naturally e.g. "Welcome back! I remember you're keen on keeping things budget-friendly — still the case?"
-- If new user: introduce yourself briefly and ask what they're interested in.
-- Ask for missing info naturally (location, budget, dates) — one question at a time.
-- When showing events: present the VETTED shortlist only, not the raw API dump.
-- Keep responses concise and conversational. Use emojis sparingly but warmly.
+RULE 1 — MEMORY SAVE: Any time the user mentions ANY of the following, you MUST immediately call remember_user_facts before doing anything else:
+- Their location or city
+- Their budget (tight, free, zero, any amount)
+- Their interests or hobbies (music, sport, art, food, etc.)
+- Their availability (free on Friday, next 2 weeks, weekends, etc.)
+- Any preference about events (genre, indoor/outdoor, alone/group, etc.)
+Call remember_user_facts with ALL facts learned so far as a single dict. Do not skip this even if you think you already saved it.
 
-Budget awareness: If a user mentions tight/zero budget, this is top priority. Never recommend paid events without flagging the cost clearly.
+RULE 2 — MEMORY LOAD: The VERY FIRST thing you do in ANY conversation is call get_user_facts. Before greeting. Before anything. Always.
+
+RULE 3 — EVENT SEARCH: When user asks for events, call search_events with location and keyword.
+
+RULE 4 — VET RESULTS: After search_events returns, ALWAYS call vet_recommendations before showing results to the user.
+
+RULE 5 — RETURNING USERS: If get_user_facts returns data, greet them by referencing what you know. e.g. "Welcome back! Still looking for free events in London?"
+
+Conversation style:
+- Warm, friendly, concise
+- Ask one question at a time
+- Never show raw API results — always vet first
+
+Budget awareness: Zero/tight budget = top priority filter. Never recommend paid events without a clear warning.
 
 Today's date: """ + datetime.now().strftime("%A, %d %B %Y")
 
@@ -328,8 +338,47 @@ Today's date: """ + datetime.now().strftime("%A, %d %B %Y")
 agent = build_agent()
 
 
+def extract_and_save_facts(message: str):
+    """Use a separate LLM call to extract facts from user message and save them."""
+    llm = ChatOpenAI(
+        model="openai/gpt-4o-mini",
+        base_url="https://openrouter.ai/api/v1",
+        api_key=os.getenv("OPENROUTER_API_KEY", ""),
+        temperature=0,
+    )
+    system = """You are a fact extractor. Extract key facts from the user message.
+Return ONLY a JSON object with any of these keys if mentioned:
+- budget: their budget (e.g. "zero", "free only", "£20 max")
+- location: their city/location
+- interests: list of interests/hobbies
+- availability: when they are free
+- genre: music genre preference
+- other: any other relevant preference
+
+If nothing relevant is mentioned, return {}
+Return ONLY the JSON object, no other text."""
+
+    response = llm.invoke([
+        SystemMessage(content=system),
+        HumanMessage(content=message)
+    ])
+    
+    try:
+        text = response.content.strip().strip("```json").strip("```").strip()
+        facts = json.loads(text)
+        if facts:
+            
+            save_memory(facts)
+            
+    except Exception as e:
+        
+
+
 def chat(message: str, history: list) -> str:
     """Main entry point. history is a list of (human, ai) tuples."""
+    # Always try to extract and save facts from user message
+    extract_and_save_facts(message)
+    
     messages = []
     for human, ai in history:
         messages.append(HumanMessage(content=human))
